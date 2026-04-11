@@ -11,6 +11,10 @@ Le LiDAR envoie un message LaserScan avec :
 
 une liste de distances : ranges[]
 chaque valeur correspond à un angle
+
+idée de navigation :
+-> utiliser les côtés pour rester centré et l'avant pour déclencher un virage plus franc
+-> en utilisant la distance avant seulement le robot reste souvent coincé
 """
 
 
@@ -23,10 +27,10 @@ class CorridorNode (Node) :
 
 
         # Paramètres
-        self.declare_parameter('linear_scale', 0.1)  
-        self.declare_parameter('angular_scale', 1.2)
-        self.declare_parameter('seuil_arret', 0.15)
-        self.declare_parameter('angular_scale_obstacle', 0.5)
+        self.declare_parameter('linear_scale', 0.05)  
+        self.declare_parameter('angular_scale', 0.7)
+        self.declare_parameter('seuil_arret', 0.22)
+        self.declare_parameter('angular_scale_obstacle', 0.9)
 
         self.linear_scale = float(self.get_parameter('linear_scale').value)      
         self.angular_scale = float(self.get_parameter('angular_scale').value) 
@@ -39,12 +43,19 @@ class CorridorNode (Node) :
         self.declare_parameter('front_center_deg', 180.0)
         self.declare_parameter('side_window_deg', 30.0)
         self.declare_parameter('front_window_deg', 20.0)
+        # diagonales
+        self.declare_parameter('front_left_center_deg', 135.0)
+        self.declare_parameter('front_right_center_deg', 225.0)
+        self.declare_parameter('diag_window_deg', 20.0)
 
         self.left_center_deg = float(self.get_parameter('left_center_deg').value)
         self.right_center_deg = float(self.get_parameter('right_center_deg').value)
         self.front_center_deg = float(self.get_parameter('front_center_deg').value)
         self.side_window_deg = float(self.get_parameter('side_window_deg').value)
         self.front_window_deg = float(self.get_parameter('front_window_deg').value)
+        self.front_left_center_deg = float(self.get_parameter('front_left_center_deg').value)
+        self.front_right_center_deg = float(self.get_parameter('front_right_center_deg').value)
+        self.diag_window_deg = float(self.get_parameter('diag_window_deg').value)
 
         # abonnenement à /scan 
         self.scan_sub = self.create_subscription(
@@ -108,12 +119,22 @@ class CorridorNode (Node) :
         dist_gauche = sum(valeurs_gauche) / len(valeurs_gauche) if valeurs_gauche else None
         dist_droite = sum(valeurs_droite) / len(valeurs_droite) if valeurs_droite else None
         dist_avant = min(valeurs_avant) if valeurs_avant else None
+        dist_avant_gauche = self.moyenne_secteur(
+            msg,
+            self.front_left_center_deg - self.diag_window_deg,
+            self.front_left_center_deg + self.diag_window_deg
+        )
+        dist_avant_droite = self.moyenne_secteur(
+            msg,
+            self.front_right_center_deg - self.diag_window_deg,
+            self.front_right_center_deg + self.diag_window_deg
+        )
 
         cmd = Twist()
 
 
         # Fallback 
-        if dist_gauche is None or dist_droite is None or dist_avant is None :
+        if dist_gauche is None or dist_droite is None or dist_avant is None or dist_avant_gauche is None or dist_avant_droite is None :
             cmd.linear.x = 0.0  # on n'avance pas
             cmd.angular.z = 0.0 # on ne tourne pas
             self.cmd_pub.publish(cmd)
@@ -125,28 +146,35 @@ class CorridorNode (Node) :
 
 
         # Sécurité
-        if dist_avant < self.seuil_arret and abs(dist_gauche - dist_droite) < 0.2 :
-            # si mur devant ET robot centré => obstacle réel => tourner
-            # mais si mur devant + déséquilibre gauche/droite => c'est un virage => continuer à avancer
-            
-            cmd.linear.x = 0.5 # robor sort du blocage très lentement
-
-            # on tourne du côté où il y a le plus d'espace
-            # A VOIR SI LE SENS EST BON
-            if dist_gauche > dist_droite :
+        if dist_avant < self.seuil_arret:
+            cmd.linear.x = 0.03
+            # choisir le côté le plus ouvert en diagonale
+            if dist_avant_gauche > dist_avant_droite :
                 cmd.angular.z = self.angular_scale_obstacle
             else :
                 cmd.angular.z = -self.angular_scale_obstacle
-        
-        else :
+            """
+            # tourner vers le côté le plus ouvert
+            if dist_gauche > dist_droite:
+                cmd.angular.z = self.angular_scale_obstacle
+            else:
+                cmd.angular.z = -self.angular_scale_obstacle
+            """
+        else:
             erreur = dist_gauche - dist_droite
-            cmd.linear.x = self.linear_scale
-            cmd.angular.z = self.angular_scale * erreur
-            
-            cmd.angular.z = max(min(cmd.angular.z, 1.5), -1.5) # clamp vitesse angulaire
+            erreur = max(min(erreur, 1.0), -1.0)
+
+            proche_mur = min(dist_gauche, dist_droite) < 0.20
+            if proche_mur :
+                cmd.linear.x = 0.03 
+            else :
+                cmd.linear.x = self.linear_scale
+
+            cmd.angular.z = -self.angular_scale * erreur
+            cmd.angular.z = max(min(cmd.angular.z, 1.2), -1.2)
+
 
         self.cmd_pub.publish(cmd)
-
 
         now = self.get_clock().now()
 

@@ -28,8 +28,8 @@ class CorridorNode (Node) :
 
         # Paramètres
         self.declare_parameter('linear_scale', 0.04)  
-        self.declare_parameter('angular_scale', 0.35)
-        self.declare_parameter('seuil_arret', 0.20)
+        self.declare_parameter('angular_scale', 0.30)
+        self.declare_parameter('seuil_arret', 0.24)
         self.declare_parameter('angular_scale_obstacle', 0.5)
         self.declare_parameter('wall_target_dist', 0.30)
         
@@ -60,12 +60,19 @@ class CorridorNode (Node) :
         self.front_right_center_deg = float(self.get_parameter('front_right_center_deg').value)
         self.diag_window_deg = float(self.get_parameter('diag_window_deg').value)
 
-        
 
         # Logique d'états
         self.mode = "SUIVRE"
         self.turn_steps_remaining = 0
         self.direction_virage = 0   # +1 gauche, -1 droite
+
+        # filtrage pour réduire la sensibilité (filtrage exponentiel des distances)
+        self.alpha = 0.7
+        self.dist_gauche_f = None
+        self.dist_droite_f = None
+        self.dist_avant_f = None
+        self.dist_avant_gauche_f = None
+        self.dist_avant_droite_f = None
 
         # abonnenement à /scan 
         self.scan_sub = self.create_subscription(
@@ -85,27 +92,6 @@ class CorridorNode (Node) :
 
 
     def scan_callback (self, msg : LaserScan) :
-
-        """
-        dist_gauche = self.moyenne_secteur(
-            msg,
-            self.left_center_deg - self.side_window_deg,
-            self.left_center_deg + self.side_window_deg
-        )
-
-        dist_droite = self.moyenne_secteur(
-            msg,
-            self.right_center_deg - self.side_window_deg,
-            self.right_center_deg + self.side_window_deg
-        )
-
-        dist_avant = self.min_secteur(
-            msg,
-            360.0 - self.front_window_deg,
-            self.front_window_deg
-        )
-        """
-        
 
         # DEBUG 
         valeurs_gauche = self.get_valeurs(
@@ -129,16 +115,33 @@ class CorridorNode (Node) :
         dist_gauche = sum(valeurs_gauche) / len(valeurs_gauche) if valeurs_gauche else None
         dist_droite = sum(valeurs_droite) / len(valeurs_droite) if valeurs_droite else None
         dist_avant = min(valeurs_avant) if valeurs_avant else None
+
         dist_avant_gauche = self.moyenne_secteur(
             msg,
             self.front_left_center_deg - self.diag_window_deg,
             self.front_left_center_deg + self.diag_window_deg
         )
+
         dist_avant_droite = self.moyenne_secteur(
             msg,
             self.front_right_center_deg - self.diag_window_deg,
             self.front_right_center_deg + self.diag_window_deg
         )
+
+        # Filtrage exponentiel
+        self.dist_gauche_f = dist_gauche if self.dist_gauche_f is None else self.alpha * self.dist_gauche_f + (1.0 - self.alpha) * dist_gauche
+        self.dist_droite_f = dist_droite if self.dist_droite_f is None else self.alpha * self.dist_droite_f + (1.0 - self.alpha) * dist_droite
+        self.dist_avant_f = dist_avant if self.dist_avant_f is None else self.alpha * self.dist_avant_f + (1.0 - self.alpha) * dist_avant
+        self.dist_avant_gauche_f = dist_avant_gauche if self.dist_avant_gauche_f is None else self.alpha * self.dist_avant_gauche_f + (1.0 - self.alpha) * dist_avant_gauche
+        self.dist_avant_droite_f = dist_avant_droite if self.dist_avant_droite_f is None else self.alpha * self.dist_avant_droite_f + (1.0 - self.alpha) * dist_avant_droite
+
+        # On remplace les distances brutes par les distances filtrées
+        dist_gauche = self.dist_gauche_f
+        dist_droite = self.dist_droite_f
+        dist_avant = self.dist_avant_f
+        dist_avant_gauche = self.dist_avant_gauche_f
+        dist_avant_droite = self.dist_avant_droite_f
+
 
         cmd = Twist()
 
@@ -154,55 +157,48 @@ class CorridorNode (Node) :
             )
             return
 
-
-        # --- MODE VIRAGE : suivre le mur gauche ---
-        if self.mode == "VIRAGE_GAUCHE" :
-            erreur_mur = self.wall_target_dist - dist_gauche
-
-            cmd.linear.x = 0.04
-            cmd.angular.z = -0.8 * erreur_mur
-
-            cmd.angular.z = max(min(cmd.angular.z, 0.6), -0.6)
-
+        # --- MODE VIRAGE EN COURS ---
+        if self.mode == "VIRAGE_GAUCHE":
+            cmd.linear.x = 0.03
+            cmd.angular.z = -0.50
             self.turn_steps_remaining -= 1
 
-            # on sort du mode virage quand l'avant se rouvre
-            if self.turn_steps_remaining <= 0 and dist_avant > 0.35 :
+            # on sort du virage seulement si on a assez tourné
+            # ET que l'avant est suffisamment dégagé
+            if self.turn_steps_remaining <= 0 and dist_avant > 0.40:
                 self.mode = "SUIVRE"
 
-        # --- DÉCLENCHEMENT VIRAGE ---
-        elif dist_avant < self.seuil_arret :
+        # --- DÉCLENCHEMENT DU VIRAGE ---
+        elif dist_avant < self.seuil_arret and dist_avant_gauche > dist_avant_droite:
             self.mode = "VIRAGE_GAUCHE"
-            self.turn_steps_remaining = 12
-
-            erreur_mur = self.wall_target_dist - dist_gauche
-            cmd.linear.x = 0.04
-            cmd.angular.z = -0.8 * erreur_mur
-            cmd.angular.z = max(min(cmd.angular.z, 0.6), -0.6)
+            self.turn_steps_remaining = 25
+            cmd.linear.x = 0.02
+            cmd.angular.z = -0.25
 
         # --- SUIVI NORMAL ---
         else:
             erreur = dist_gauche - dist_droite
-            erreur = max(min(erreur, 0.8), -0.8)
+            erreur = max(min(erreur, 0.6), -0.6)
 
-            if min(dist_gauche, dist_droite) < 0.18:
+            if min(dist_gauche, dist_droite) < 0.20:
                 cmd.linear.x = 0.025
             else:
                 cmd.linear.x = self.linear_scale
 
-            cmd.angular.z = -self.angular_scale * erreur
-            cmd.angular.z = max(min(cmd.angular.z, 0.5), -0.5)
+            cmd.angular.z = -self.angular_scale * erreur  # faire attention au signe
+            cmd.angular.z = max(min(cmd.angular.z, 0.4), -0.4)
 
 
         self.cmd_pub.publish(cmd)
 
         now = self.get_clock().now()
 
-        if (now - self.last_log_time).nanoseconds > 5e8:  # 0.5 s
+        if (now - self.last_log_time).nanoseconds > 5e8: # 0.5 s
             error = dist_gauche - dist_droite
             self.get_logger().info(
-                f'gauche={dist_gauche:.3f} droite={dist_droite:.3f} '
-                f'avant={dist_avant:.3f} erreur={error:.3f}'
+                f'mode={self.mode} gauche={dist_gauche:.3f} droite={dist_droite:.3f} '
+                f'avant={dist_avant:.3f} av_g={dist_avant_gauche:.3f} '
+                f'av_d={dist_avant_droite:.3f} erreur={error:.3f}'
             )
             self.last_log_time = now
 

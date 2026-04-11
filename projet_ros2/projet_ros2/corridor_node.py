@@ -27,15 +27,18 @@ class CorridorNode (Node) :
 
 
         # Paramètres
-        self.declare_parameter('linear_scale', 0.05)  
-        self.declare_parameter('angular_scale', 0.7)
-        self.declare_parameter('seuil_arret', 0.22)
-        self.declare_parameter('angular_scale_obstacle', 0.9)
-
+        self.declare_parameter('linear_scale', 0.04)  
+        self.declare_parameter('angular_scale', 0.35)
+        self.declare_parameter('seuil_arret', 0.20)
+        self.declare_parameter('angular_scale_obstacle', 0.5)
+        self.declare_parameter('wall_target_dist', 0.30)
+        
         self.linear_scale = float(self.get_parameter('linear_scale').value)      
         self.angular_scale = float(self.get_parameter('angular_scale').value) 
         self.seuil_arret = float(self.get_parameter('seuil_arret').value)  
         self.angular_scale_obstacle = float(self.get_parameter('angular_scale_obstacle').value) 
+        self.wall_target_dist = float(self.get_parameter('wall_target_dist').value)
+
 
         # Secteurs angulaires en dégrés : on prend des secteurs au lieu d'une seule mesure pour avoir des mesures plus stables
         self.declare_parameter('left_center_deg', 90.0)
@@ -56,6 +59,13 @@ class CorridorNode (Node) :
         self.front_left_center_deg = float(self.get_parameter('front_left_center_deg').value)
         self.front_right_center_deg = float(self.get_parameter('front_right_center_deg').value)
         self.diag_window_deg = float(self.get_parameter('diag_window_deg').value)
+
+        
+
+        # Logique d'états
+        self.mode = "SUIVRE"
+        self.turn_steps_remaining = 0
+        self.direction_virage = 0   # +1 gauche, -1 droite
 
         # abonnenement à /scan 
         self.scan_sub = self.create_subscription(
@@ -145,33 +155,43 @@ class CorridorNode (Node) :
             return
 
 
-        # Sécurité
-        if dist_avant < self.seuil_arret:
-            cmd.linear.x = 0.03
-            # choisir le côté le plus ouvert en diagonale
-            if dist_avant_gauche > dist_avant_droite :
-                cmd.angular.z = self.angular_scale_obstacle
-            else :
-                cmd.angular.z = -self.angular_scale_obstacle
-            """
-            # tourner vers le côté le plus ouvert
-            if dist_gauche > dist_droite:
-                cmd.angular.z = self.angular_scale_obstacle
-            else:
-                cmd.angular.z = -self.angular_scale_obstacle
-            """
+        # --- MODE VIRAGE : suivre le mur gauche ---
+        if self.mode == "VIRAGE_GAUCHE" :
+            erreur_mur = self.wall_target_dist - dist_gauche
+
+            cmd.linear.x = 0.04
+            cmd.angular.z = -0.8 * erreur_mur
+
+            cmd.angular.z = max(min(cmd.angular.z, 0.6), -0.6)
+
+            self.turn_steps_remaining -= 1
+
+            # on sort du mode virage quand l'avant se rouvre
+            if self.turn_steps_remaining <= 0 and dist_avant > 0.35 :
+                self.mode = "SUIVRE"
+
+        # --- DÉCLENCHEMENT VIRAGE ---
+        elif dist_avant < self.seuil_arret :
+            self.mode = "VIRAGE_GAUCHE"
+            self.turn_steps_remaining = 12
+
+            erreur_mur = self.wall_target_dist - dist_gauche
+            cmd.linear.x = 0.04
+            cmd.angular.z = -0.8 * erreur_mur
+            cmd.angular.z = max(min(cmd.angular.z, 0.6), -0.6)
+
+        # --- SUIVI NORMAL ---
         else:
             erreur = dist_gauche - dist_droite
-            erreur = max(min(erreur, 1.0), -1.0)
+            erreur = max(min(erreur, 0.8), -0.8)
 
-            proche_mur = min(dist_gauche, dist_droite) < 0.20
-            if proche_mur :
-                cmd.linear.x = 0.03 
-            else :
+            if min(dist_gauche, dist_droite) < 0.18:
+                cmd.linear.x = 0.025
+            else:
                 cmd.linear.x = self.linear_scale
 
             cmd.angular.z = -self.angular_scale * erreur
-            cmd.angular.z = max(min(cmd.angular.z, 1.2), -1.2)
+            cmd.angular.z = max(min(cmd.angular.z, 0.5), -0.5)
 
 
         self.cmd_pub.publish(cmd)

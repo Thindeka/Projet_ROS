@@ -24,7 +24,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'follow_line = projet_ros2.line_following:main'
+            'follow_line = projet_ros2.line_following:main',
+            'corridor_node = projet_ros2.corridor_node:main'
         ],
     },
 )

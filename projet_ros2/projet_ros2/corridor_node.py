@@ -61,13 +61,20 @@ class CorridorNode (Node) :
         self.diag_window_deg = float(self.get_parameter('diag_window_deg').value)
 
 
-        # Logique d'états
+        # Logique de modes : SUIVRE -> VIRAGE -> RECUPERATION - SUIVRE
         self.mode = "SUIVRE"
         self.turn_steps_remaining = 0
-        self.direction_virage = 0   # +1 gauche, -1 droite
+        self.direction_virage = 0   # -1 gauche, +1 droite
+        self.recover_steps_remaining = 0 # mode de récupération
+
+        # pour eviter que le robot tourne trop sur lui meme et se desoriente
+        self.angle_accumule = 0.0
+        self.last_time = self.get_clock().now()
+        self.max_angle = math.radians(80)  # sécurité < 90°
+
 
         # filtrage pour réduire la sensibilité (filtrage exponentiel des distances)
-        self.alpha = 0.7
+        self.alpha = 0.5 # plus c'est petit, plus le robot est reactif aux virages
         self.dist_gauche_f = None
         self.dist_droite_f = None
         self.dist_avant_f = None
@@ -92,6 +99,10 @@ class CorridorNode (Node) :
 
 
     def scan_callback (self, msg : LaserScan) :
+
+        now = self.get_clock().now()
+        dt = (now - self.last_time).nanoseconds * 1e-9
+        self.last_time = now
 
         # DEBUG 
         valeurs_gauche = self.get_valeurs(
@@ -157,41 +168,81 @@ class CorridorNode (Node) :
             )
             return
 
-        # --- MODE VIRAGE EN COURS ---
-        if self.mode == "VIRAGE_GAUCHE":
-            cmd.linear.x = 0.03
-            cmd.angular.z = -0.50
+        # MODE VIRAGE GAUCHE 
+        if self.mode == "VIRAGE_GAUCHE" :
+            cmd.linear.x = 0.025  # ralentit
+            cmd.angular.z = -0.35
+            self.angle_accumule += abs(cmd.angular.z) * dt
             self.turn_steps_remaining -= 1
 
-            # on sort du virage seulement si on a assez tourné
-            # ET que l'avant est suffisamment dégagé
-            if self.turn_steps_remaining <= 0 and dist_avant > 0.40:
+            if self.angle_accumule > self.max_angle or (dist_avant > 0.45 and self.turn_steps_remaining <= 0):
+                self.mode = "RECUPERATION"
+                self.recover_steps_remaining = 10
+                self.angle_accumule = 0.0
+
+        # MODE VIRAGE DROITE  
+        elif self.mode == "VIRAGE_DROITE" :
+            cmd.linear.x = 0.025  # ralentit
+            cmd.angular.z = -0.35
+            self.angle_accumule += abs(cmd.angular.z) * dt
+            self.turn_steps_remaining -= 1
+
+            if self.angle_accumule > self.max_angle or (dist_avant > 0.45 and self.turn_steps_remaining <= 0):
+                self.mode = "RECUPERATION"
+                self.recover_steps_remaining = 10
+                self.angle_accumule = 0.0
+
+        # MODE RECUPERATION  
+        elif self.mode == "RECUPERATION" :
+            erreur = dist_gauche - dist_droite
+            erreur = max(min(erreur, 0.4), -0.4)  # on fait un clamp
+
+            cmd.linear.x = 0.03
+            cmd.angular.z = -0.20 * erreur
+            cmd.angular.z = max(min(cmd.angular.z, 0.20), -0.20)
+
+            self.recover_steps_remaining -= 1
+            if self.recover_steps_remaining <= 0:
                 self.mode = "SUIVRE"
 
-        # --- DÉCLENCHEMENT DU VIRAGE ---
-        elif dist_avant < self.seuil_arret and dist_avant_gauche > dist_avant_droite:
-            self.mode = "VIRAGE_GAUCHE"
-            self.turn_steps_remaining = 25
-            cmd.linear.x = 0.02
-            cmd.angular.z = -0.25
+        #  DECLENCHEMENT DU VIRAGE  
+        elif dist_avant < 0.38 :
+            if dist_avant_gauche > dist_avant_droite:
+                self.mode = "VIRAGE_GAUCHE"
+                self.turn_steps_remaining = 18
+                self.angle_accumule = 0.0
+                cmd.linear.x = 0.025
+                cmd.angular.z = -0.35
+            else :
+                self.mode = "VIRAGE_DROITE"
+                self.turn_steps_remaining = 18
+                cmd.linear.x = 0.025
+                cmd.angular.z = 0.35
 
-        # --- SUIVI NORMAL ---
-        else:
+        #  PRE-VIRAGE : ralentir si l'avant se ferme  
+        elif dist_avant < 0.55 :
+            erreur = dist_gauche - dist_droite
+            erreur = max(min(erreur, 0.5), -0.5)
+
+            cmd.linear.x = 0.025
+            cmd.angular.z = -0.25 * erreur
+            cmd.angular.z = max(min(cmd.angular.z, 0.25), -0.25)
+
+        #   SUIVI NORMAL  
+        else :
             erreur = dist_gauche - dist_droite
             erreur = max(min(erreur, 0.6), -0.6)
 
             if min(dist_gauche, dist_droite) < 0.20:
                 cmd.linear.x = 0.025
-            else:
+            else :
                 cmd.linear.x = self.linear_scale
 
-            cmd.angular.z = -self.angular_scale * erreur  # faire attention au signe
-            cmd.angular.z = max(min(cmd.angular.z, 0.4), -0.4)
+            cmd.angular.z = -self.angular_scale * erreur
+            cmd.angular.z = max(min(cmd.angular.z, 0.35), -0.35)
 
 
         self.cmd_pub.publish(cmd)
-
-        now = self.get_clock().now()
 
         if (now - self.last_log_time).nanoseconds > 5e8: # 0.5 s
             error = dist_gauche - dist_droite

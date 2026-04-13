@@ -5,83 +5,37 @@ from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
 
 
-"""
-FONCTIONNEMENT LIDAR
-Le LiDAR envoie un message LaserScan avec :
+class CorridorNode(Node):
 
-une liste de distances : ranges[]
-chaque valeur correspond à un angle
-
-idée de navigation :
--> utiliser les côtés pour rester centré et l'avant pour déclencher un virage plus franc
--> en utilisant la distance avant seulement le robot reste souvent coincé
-"""
-
-
-
-class CorridorNode (Node) :
-
-
-    def __init__(self) :
+    def __init__(self):
         super().__init__('corridor')
 
-
         # Paramètres
-        self.declare_parameter('linear_scale', 0.04)  
-        self.declare_parameter('angular_scale', 0.30)
-        self.declare_parameter('seuil_arret', 0.24)
+        self.declare_parameter('linear_scale', 0.05)
+        self.declare_parameter('angular_scale', 1.2)
+        self.declare_parameter('seuil_arret', 0.15)
         self.declare_parameter('angular_scale_obstacle', 0.5)
-        self.declare_parameter('wall_target_dist', 0.30)
-        
-        self.linear_scale = float(self.get_parameter('linear_scale').value)      
-        self.angular_scale = float(self.get_parameter('angular_scale').value) 
-        self.seuil_arret = float(self.get_parameter('seuil_arret').value)  
-        self.angular_scale_obstacle = float(self.get_parameter('angular_scale_obstacle').value) 
-        self.wall_target_dist = float(self.get_parameter('wall_target_dist').value)
+        self.declare_parameter('seuil_declenchement_virage', 0.28)
 
+        self.linear_scale = float(self.get_parameter('linear_scale').value)
+        self.angular_scale = float(self.get_parameter('angular_scale').value)
+        self.seuil_arret = float(self.get_parameter('seuil_arret').value)
+        self.angular_scale_obstacle = float(self.get_parameter('angular_scale_obstacle').value)
+        self.seuil_declenchement_virage = float(self.get_parameter('seuil_declenchement_virage').value)
 
-        # Secteurs angulaires en dégrés : on prend des secteurs au lieu d'une seule mesure pour avoir des mesures plus stables
+        # Secteurs angulaires en degrés
         self.declare_parameter('left_center_deg', 90.0)
         self.declare_parameter('right_center_deg', 270.0)
         self.declare_parameter('front_center_deg', 180.0)
         self.declare_parameter('side_window_deg', 30.0)
-        self.declare_parameter('front_window_deg', 20.0)
-        # diagonales
-        self.declare_parameter('front_left_center_deg', 135.0)
-        self.declare_parameter('front_right_center_deg', 225.0)
-        self.declare_parameter('diag_window_deg', 20.0)
+        self.declare_parameter('front_window_deg', 10.0)
 
         self.left_center_deg = float(self.get_parameter('left_center_deg').value)
         self.right_center_deg = float(self.get_parameter('right_center_deg').value)
         self.front_center_deg = float(self.get_parameter('front_center_deg').value)
         self.side_window_deg = float(self.get_parameter('side_window_deg').value)
         self.front_window_deg = float(self.get_parameter('front_window_deg').value)
-        self.front_left_center_deg = float(self.get_parameter('front_left_center_deg').value)
-        self.front_right_center_deg = float(self.get_parameter('front_right_center_deg').value)
-        self.diag_window_deg = float(self.get_parameter('diag_window_deg').value)
 
-
-        # Logique de modes : SUIVRE -> VIRAGE -> RECUPERATION - SUIVRE
-        self.mode = "SUIVRE"
-        self.turn_steps_remaining = 0
-        self.direction_virage = 0   # -1 gauche, +1 droite
-        self.recover_steps_remaining = 0 # mode de récupération
-
-        # pour eviter que le robot tourne trop sur lui meme et se desoriente
-        self.angle_accumule = 0.0
-        self.last_time = self.get_clock().now()
-        self.max_angle = math.radians(80)  # sécurité < 90°
-
-
-        # filtrage pour réduire la sensibilité (filtrage exponentiel des distances)
-        self.alpha = 0.5 # plus c'est petit, plus le robot est reactif aux virages
-        self.dist_gauche_f = None
-        self.dist_droite_f = None
-        self.dist_avant_f = None
-        self.dist_avant_gauche_f = None
-        self.dist_avant_droite_f = None
-
-        # abonnenement à /scan 
         self.scan_sub = self.create_subscription(
             LaserScan,
             '/scan',
@@ -89,22 +43,14 @@ class CorridorNode (Node) :
             10
         )
 
-        # publication sur /cmd_vel
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
-        # log
+        # Log
         self.last_log_time = self.get_clock().now()
         self.get_logger().info('corridor_node a commencé')
 
+    def scan_callback(self, msg: LaserScan):
 
-
-    def scan_callback (self, msg : LaserScan) :
-
-        now = self.get_clock().now()
-        dt = (now - self.last_time).nanoseconds * 1e-9
-        self.last_time = now
-
-        # DEBUG 
         valeurs_gauche = self.get_valeurs(
             msg,
             self.left_center_deg - self.side_window_deg,
@@ -126,41 +72,14 @@ class CorridorNode (Node) :
         dist_gauche = sum(valeurs_gauche) / len(valeurs_gauche) if valeurs_gauche else None
         dist_droite = sum(valeurs_droite) / len(valeurs_droite) if valeurs_droite else None
         dist_avant = min(valeurs_avant) if valeurs_avant else None
-
-        dist_avant_gauche = self.moyenne_secteur(
-            msg,
-            self.front_left_center_deg - self.diag_window_deg,
-            self.front_left_center_deg + self.diag_window_deg
-        )
-
-        dist_avant_droite = self.moyenne_secteur(
-            msg,
-            self.front_right_center_deg - self.diag_window_deg,
-            self.front_right_center_deg + self.diag_window_deg
-        )
-
-        # Filtrage exponentiel
-        self.dist_gauche_f = dist_gauche if self.dist_gauche_f is None else self.alpha * self.dist_gauche_f + (1.0 - self.alpha) * dist_gauche
-        self.dist_droite_f = dist_droite if self.dist_droite_f is None else self.alpha * self.dist_droite_f + (1.0 - self.alpha) * dist_droite
-        self.dist_avant_f = dist_avant if self.dist_avant_f is None else self.alpha * self.dist_avant_f + (1.0 - self.alpha) * dist_avant
-        self.dist_avant_gauche_f = dist_avant_gauche if self.dist_avant_gauche_f is None else self.alpha * self.dist_avant_gauche_f + (1.0 - self.alpha) * dist_avant_gauche
-        self.dist_avant_droite_f = dist_avant_droite if self.dist_avant_droite_f is None else self.alpha * self.dist_avant_droite_f + (1.0 - self.alpha) * dist_avant_droite
-
-        # On remplace les distances brutes par les distances filtrées
-        dist_gauche = self.dist_gauche_f
-        dist_droite = self.dist_droite_f
-        dist_avant = self.dist_avant_f
-        dist_avant_gauche = self.dist_avant_gauche_f
-        dist_avant_droite = self.dist_avant_droite_f
-
+        dist_avant_moy = sum(valeurs_avant) / len(valeurs_avant) if valeurs_avant else None
 
         cmd = Twist()
 
-
-        # Fallback 
-        if dist_gauche is None or dist_droite is None or dist_avant is None or dist_avant_gauche is None or dist_avant_droite is None :
-            cmd.linear.x = 0.0  # on n'avance pas
-            cmd.angular.z = 0.0 # on ne tourne pas
+        # Fallback
+        if dist_avant is None or dist_avant_moy is None:
+            cmd.linear.x = 0.0
+            cmd.angular.z = 0.0
             self.cmd_pub.publish(cmd)
             self.get_logger().warn(
                 f'/scan invalide | nb_gauche={len(valeurs_gauche)} '
@@ -168,112 +87,62 @@ class CorridorNode (Node) :
             )
             return
 
-        # MODE VIRAGE GAUCHE 
-        if self.mode == "VIRAGE_GAUCHE" :
-            cmd.linear.x = 0.025  # ralentit
-            cmd.angular.z = -0.35
-            self.angle_accumule += abs(cmd.angular.z) * dt
-            self.turn_steps_remaining -= 1
+        # Si un côté manque, on met une grande distance par défaut
+        if dist_gauche is None:
+            dist_gauche = msg.range_max
 
-            if self.angle_accumule > self.max_angle or (dist_avant > 0.45 and self.turn_steps_remaining <= 0):
-                self.mode = "RECUPERATION"
-                self.recover_steps_remaining = 10
-                self.angle_accumule = 0.0
+        if dist_droite is None:
+            dist_droite = msg.range_max
 
-        # MODE VIRAGE DROITE  
-        elif self.mode == "VIRAGE_DROITE" :
-            cmd.linear.x = 0.025  # ralentit
-            cmd.angular.z = -0.35
-            self.angle_accumule += abs(cmd.angular.z) * dt
-            self.turn_steps_remaining -= 1
-
-            if self.angle_accumule > self.max_angle or (dist_avant > 0.45 and self.turn_steps_remaining <= 0):
-                self.mode = "RECUPERATION"
-                self.recover_steps_remaining = 10
-                self.angle_accumule = 0.0
-
-        # MODE RECUPERATION  
-        elif self.mode == "RECUPERATION" :
-            erreur = dist_gauche - dist_droite
-            erreur = max(min(erreur, 0.4), -0.4)  # on fait un clamp
+        # Déclenchement du virage :
+        # - la moyenne devant montre que ça se ferme
+        # - le robot est encore à peu près centré
+        # - il y a de la place à gauche
+        if (
+            dist_avant_moy < self.seuil_declenchement_virage
+            and abs(dist_gauche - dist_droite) < 0.35
+            and dist_gauche > 0.22
+        ):
+            self.get_logger().warn('TOURNER')
 
             cmd.linear.x = 0.03
-            cmd.angular.z = -0.20 * erreur
-            cmd.angular.z = max(min(cmd.angular.z, 0.20), -0.20)
+            cmd.angular.z = self.angular_scale_obstacle   # + = gauche dans ton simulateur
 
-            self.recover_steps_remaining -= 1
-            if self.recover_steps_remaining <= 0:
-                self.mode = "SUIVRE"
-
-        #  DECLENCHEMENT DU VIRAGE  
-        elif dist_avant < 0.38 :
-            if dist_avant_gauche > dist_avant_droite:
-                self.mode = "VIRAGE_GAUCHE"
-                self.turn_steps_remaining = 18
-                self.angle_accumule = 0.0
-                cmd.linear.x = 0.025
-                cmd.angular.z = -0.35
-            else :
-                self.mode = "VIRAGE_DROITE"
-                self.turn_steps_remaining = 18
-                cmd.linear.x = 0.025
-                cmd.angular.z = 0.35
-
-        #  PRE-VIRAGE : ralentir si l'avant se ferme  
-        elif dist_avant < 0.55 :
-            erreur = dist_gauche - dist_droite
-            erreur = max(min(erreur, 0.5), -0.5)
-
-            cmd.linear.x = 0.025
-            cmd.angular.z = -0.25 * erreur
-            cmd.angular.z = max(min(cmd.angular.z, 0.25), -0.25)
-
-        #   SUIVI NORMAL  
-        else :
-            erreur = dist_gauche - dist_droite
+        else:
+            erreur = dist_droite - dist_gauche
             erreur = max(min(erreur, 0.6), -0.6)
 
-            if min(dist_gauche, dist_droite) < 0.20:
-                cmd.linear.x = 0.025
-            else :
-                cmd.linear.x = self.linear_scale
+            if abs(erreur) < 0.03:
+                erreur = 0.0
 
-            cmd.angular.z = -self.angular_scale * erreur
-            cmd.angular.z = max(min(cmd.angular.z, 0.35), -0.35)
+            # plus l'erreur est grande, plus on ralentit
+            cmd.linear.x = self.linear_scale - 0.03 * abs(erreur)
+            cmd.linear.x = max(cmd.linear.x, 0.03)
 
+            # si obstacle très proche devant, on ralentit encore
+            if dist_avant < 0.25:
+                cmd.linear.x = min(cmd.linear.x, 0.03)
+
+            cmd.angular.z = self.angular_scale * erreur
+            cmd.angular.z = max(min(cmd.angular.z, 0.4), -0.4)
 
         self.cmd_pub.publish(cmd)
 
-        if (now - self.last_log_time).nanoseconds > 5e8: # 0.5 s
-            error = dist_gauche - dist_droite
+        now = self.get_clock().now()
+        if (now - self.last_log_time).nanoseconds > 5e8:
+            erreur_log = dist_droite - dist_gauche
             self.get_logger().info(
-                f'mode={self.mode} gauche={dist_gauche:.3f} droite={dist_droite:.3f} '
-                f'avant={dist_avant:.3f} av_g={dist_avant_gauche:.3f} '
-                f'av_d={dist_avant_droite:.3f} erreur={error:.3f}'
+                f'gauche={dist_gauche:.3f} droite={dist_droite:.3f} '
+                f'avant_min={dist_avant:.3f} avant_moy={dist_avant_moy:.3f} '
+                f'erreur={erreur_log:.3f}'
             )
             self.last_log_time = now
 
-
-
-    def moyenne_secteur (self, scan, deg_debut, deg_fin) :
-        """
-        Retourne la moyenne des angles dans un secteur
-        """
+    def moyenne_secteur(self, scan, deg_debut, deg_fin):
         valeurs = self.get_valeurs(scan, deg_debut, deg_fin)
-        if not valeurs :
+        if not valeurs:
             return None
         return sum(valeurs) / len(valeurs)
-    
-
-
-    def min_secteur (self, scan, deg_debut, deg_fin) :
-        """
-        Retourne le plus petit angle dans un secteur
-        """
-        valeurs = self.get_valeurs(scan, deg_debut, deg_fin)
-        if not valeurs :
-            return None
-        return min(valeurs)
 
     def get_valeurs(self, scan, deg_debut, deg_fin):
         rad_debut = math.radians(deg_debut) % (2.0 * math.pi)
@@ -284,10 +153,8 @@ class CorridorNode (Node) :
         for i, r in enumerate(scan.ranges):
             angle = (scan.angle_min + i * scan.angle_increment) % (2.0 * math.pi)
 
-            # secteur normal
             if rad_debut <= rad_fin:
                 dans_secteur = rad_debut <= angle <= rad_fin
-            # secteur qui traverse 0°
             else:
                 dans_secteur = angle >= rad_debut or angle <= rad_fin
 
@@ -301,27 +168,20 @@ class CorridorNode (Node) :
 
         return valeurs
 
-    
 
-
-
-def main(args=None) :
-
+def main(args=None):
     rclpy.init(args=args)
     node = CorridorNode()
 
-    try :
+    try:
         rclpy.spin(node)
-
-    except KeyboardInterrupt :
+    except KeyboardInterrupt:
         pass
-
-    finally :
+    finally:
         stop_msg = Twist()
         node.cmd_pub.publish(stop_msg)
         node.destroy_node()
         rclpy.shutdown()
-
 
 
 if __name__ == '__main__':

@@ -10,9 +10,9 @@ class CorridorNode(Node):
         super().__init__('corridor')
 
         # Paramètres
-        self.declare_parameter('linear_scale', 0.05)
+        self.declare_parameter('linear_scale', 0.02) # 0.05
         self.declare_parameter('angular_scale', 0.8)
-        self.declare_parameter('seuil_virage', 0.5)
+        self.declare_parameter('seuil_virage', 0.36)
         self.declare_parameter('angular_scale_obstacle', 0.45)
 
         self.linear_scale = float(self.get_parameter('linear_scale').value)
@@ -28,7 +28,7 @@ class CorridorNode(Node):
         self.declare_parameter('right_center_deg', 270.0)
         self.declare_parameter('front_center_deg', 180.0)
         self.declare_parameter('side_window_deg', 20.0)
-        self.declare_parameter('front_window_deg', 12.0)
+        self.declare_parameter('front_window_deg', 15.0)
 
         self.left_center_deg = float(self.get_parameter('left_center_deg').value)
         self.right_center_deg = float(self.get_parameter('right_center_deg').value)
@@ -40,9 +40,15 @@ class CorridorNode(Node):
         self.mode = "CENTER"
         self.turn_steps_remaining = 0
 
-        # autorisation de virage 
-        self.declare_parameter('seuil_centrage_virage', 0.12)
+        # seuils
+        self.declare_parameter('seuil_centrage_virage', 0.22)
         self.declare_parameter('seuil_sortie_virage', 0.40)
+
+        self.declare_parameter('seuil_pre_virage', 0.50)
+        self.declare_parameter('seuil_min_gauche_pour_tourner', 0.20)
+
+        self.seuil_pre_virage = float(self.get_parameter('seuil_pre_virage').value)
+        self.seuil_min_gauche_pour_tourner = float(self.get_parameter('seuil_min_gauche_pour_tourner').value)
 
         self.seuil_centrage_virage = float(self.get_parameter('seuil_centrage_virage').value)
         self.seuil_sortie_virage = float(self.get_parameter('seuil_sortie_virage').value)
@@ -59,6 +65,9 @@ class CorridorNode(Node):
 
         self.last_log_time = self.get_clock().now()
         self.get_logger().info('corridor_node a commencé')
+
+
+
 
     def scan_callback(self, msg: LaserScan):
 
@@ -99,54 +108,66 @@ class CorridorNode(Node):
         # -------------------------
         # MODE VIRAGE (persistant)
         # -------------------------
-        if self.mode == "TURN_LEFT" :
-            self.get_logger().warn("MODE VIRAGE PERSISTANT")
-            # Si le robot est trop près du mur intérieur gauche,
-            # on avance un peu sans continuer à tourner
+        if self.mode == "TURN_LEFT":
+            self.get_logger().warn("VIRAGE")
+
+            # trop près du mur intérieur : avancer sans tourner
             if dist_gauche < 0.18:
                 cmd.linear.x = 0.015
                 cmd.angular.z = 0.0
 
-            # fin de virage : on réduit la rotation
+            # fin de virage : rotation plus douce
             elif dist_avant > 0.22:
                 cmd.linear.x = 0.02
                 cmd.angular.z = 0.18
 
-            else :
+            # coeur du virage
+            else:
                 cmd.linear.x = 0.02
-                cmd.angular.z = self.angular_scale_obstacle   # gauche
+                cmd.angular.z = self.angular_scale_obstacle
 
             self.turn_steps_remaining -= 1
 
-            # On ne sort du virage que si :
-            # 1) on a tourné suffisamment longtemps
-            # 2) l'avant est assez libre
-            # 3) le mur droit est revenu "visible", donc on a retrouvé le couloir
             if (
                 self.turn_steps_remaining <= 0
-                and dist_avant > 0.30
-                and dist_droite < 0.80
+                and dist_avant > self.seuil_sortie_virage
+                and abs(dist_droite - dist_gauche) < 0.25
             ):
                 self.mode = "CENTER"
-                self.get_logger().warn("SORTIE VIRAGE")
 
         # -------------------------
         # DECLENCHEMENT VIRAGE
         # -------------------------
-        elif dist_avant < self.seuil_virage :
-            self.mode = "TURN_LEFT"
+        elif (
+            dist_avant < self.seuil_virage
+            and dist_gauche > self.seuil_min_gauche_pour_tourner
+        ):
             self.get_logger().warn("DECLENCHEMENT VIRAGE")
+            self.mode = "TURN_LEFT"
             self.turn_steps_remaining = 18
 
             cmd.linear.x = 0.02
             cmd.angular.z = self.angular_scale_obstacle
 
         # -------------------------
+        # PRE-VIRAGE
+        # -------------------------
+        elif dist_avant < self.seuil_pre_virage:
+            self.get_logger().warn("PRE_VIRAGE")
+            self.mode = "CENTER"
+
+            erreur = max(min(erreur, 0.20), -0.20)
+
+            cmd.linear.x = 0.03
+            cmd.angular.z = -0.5 * self.angular_scale * erreur
+            cmd.angular.z = max(min(cmd.angular.z, 0.20), -0.20)
+
+        # -------------------------
         # MODE CENTRAGE
         # -------------------------
         else:
-            self.mode = "CENTER"    
-            self.get_logger().warn("MODE CENTRAGE")
+            self.get_logger().warn("CENTER")
+            self.mode = "CENTER"
 
             erreur = max(min(erreur, 0.25), -0.25)
 

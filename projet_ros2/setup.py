@@ -24,7 +24,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'follow_line = projet_ros2.line_following:main'
+            'follow_line = projet_ros2.line_following:main',
+            'teleop_hand = projet_ros2.teleop_hand:main',
+            'calibration = projet_ros2.hsv_calibration_node:main',
         ],
     },
 )

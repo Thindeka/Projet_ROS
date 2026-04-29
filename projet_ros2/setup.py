@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'follow_line = projet_ros2.line_following:main',
+            'corridor_node = projet_ros2.corridor_node:main',
             'teleop_hand = projet_ros2.teleop_hand:main',
             'calibration = projet_ros2.hsv_calibration_node:main',
         ],

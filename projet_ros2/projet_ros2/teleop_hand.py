@@ -26,7 +26,6 @@ class IndexTeleop(Node):
             min_tracking_confidence=0.5
         )
 
-        self.get_logger().info(f'Connexion au stream : {STREAM_URL}')
         self.cap = cv2.VideoCapture(STREAM_URL)
 
         # Le stream réseau peut mettre quelques secondes à s'ouvrir
@@ -36,7 +35,6 @@ class IndexTeleop(Node):
         self.timer = self.create_timer(0.05, self.timer_callback)
 
         print('[INIT] Téléopération par index')
-        print(f'[INIT] Stream : {STREAM_URL}')
         print('[INIT] Index vers HAUT    → AVANCER')
         print('[INIT] Index vers BAS     → RECULER')
         print('[INIT] Index vers GAUCHE  → TOURNER GAUCHE')
@@ -60,22 +58,11 @@ class IndexTeleop(Node):
 
         angle = np.degrees(np.arctan2(dy, dx))
 
-        if -90 - ANGLE_DEAD_ZONE < angle < -90 + ANGLE_DEAD_ZONE:
-            direction = 'STOP'
-        elif 90 - ANGLE_DEAD_ZONE < angle < 90 + ANGLE_DEAD_ZONE:
-            direction = 'STOP'
-        elif -45 - ANGLE_DEAD_ZONE < angle < -45 + ANGLE_DEAD_ZONE:
-            direction = 'STOP'
-        elif -90 + ANGLE_DEAD_ZONE <= angle <= -ANGLE_DEAD_ZONE:
-            direction = 'FORWARD'
-        elif ANGLE_DEAD_ZONE <= angle <= 90 - ANGLE_DEAD_ZONE:
-            direction = 'BACKWARD'
-        elif abs(angle) >= 90 + ANGLE_DEAD_ZONE:
-            direction = 'LEFT'
-        elif -ANGLE_DEAD_ZONE < angle < ANGLE_DEAD_ZONE:
-            direction = 'RIGHT'
-        else:
-            direction = 'STOP'
+        if   -135 < angle < -45:  direction = 'FORWARD'
+        elif   45 < angle < 135:  direction = 'BACKWARD'
+        elif  angle > 135 or angle < -135:  direction = 'LEFT'
+        elif  -45 <= angle <= 45:  direction = 'RIGHT'
+        else:  direction = 'STOP
 
         return direction, angle
 

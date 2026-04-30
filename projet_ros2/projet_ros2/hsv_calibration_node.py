@@ -22,6 +22,7 @@ class HSVCalibration(Node):
         cv2.namedWindow("Original", cv2.WINDOW_NORMAL)
         cv2.namedWindow("Mask", cv2.WINDOW_NORMAL)
         cv2.namedWindow("HSV Calibration", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("HSV Calibration", 900, 600)  # ← fenêtre plus large
 
         # --- Red trackbars ---
         cv2.createTrackbar("Red H min1", "HSV Calibration", 0,   179, self.nothing)
@@ -41,9 +42,13 @@ class HSVCalibration(Node):
         cv2.createTrackbar("Green V min", "HSV Calibration", 80,  255, self.nothing)
         cv2.createTrackbar("Green V max", "HSV Calibration", 255, 255, self.nothing)
 
-        # Toggle which color to preview
-        # 0 = red, 1 = green, 2 = both
         cv2.createTrackbar("Preview: 0=R 1=G 2=Both", "HSV Calibration", 2, 2, self.nothing)
+
+        # Placeholder pour forcer l'affichage des labels
+        placeholder = np.zeros((50, 900, 3), dtype=np.uint8)
+        cv2.imshow("HSV Calibration", placeholder)
+        cv2.waitKey(1)
+        cv2.waitKey(1)
 
         self.get_logger().info("HSV Calibration node started. Press 'p' to print current values, 'q' to quit.")
 

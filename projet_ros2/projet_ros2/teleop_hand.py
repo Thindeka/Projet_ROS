@@ -62,7 +62,7 @@ class IndexTeleop(Node):
         elif   45 < angle < 135:  direction = 'BACKWARD'
         elif  angle > 135 or angle < -135:  direction = 'LEFT'
         elif  -45 <= angle <= 45:  direction = 'RIGHT'
-        else:  direction = 'STOP
+        else:  direction = 'STOP'
 
         return direction, angle
 

@@ -66,7 +66,6 @@ class Challenge1Follow(Node):
         self.last_cx_mid_far    = None
         self.last_cx_mid_near   = None
 
-    *
     def scan_callback(self, msg: LaserScan):
         ranges = np.array(msg.ranges)
         n = len(ranges)

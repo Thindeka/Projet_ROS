@@ -8,8 +8,8 @@ import time
 
 # ---------------------------------------------------------------------------
 CHALLENGES = [
-    ['ros2', 'run', 'projet_ros2', 'follow_line'],  
-    ['ros2', 'run', 'projet_ros2', 'obstacle_node'],  
+    ['ros2', 'run', 'projet_ros2', 'challenge1_follow'],  
+    ['ros2', 'run', 'projet_ros2', 'challenge2_avoid'],  
     ['ros2', 'run', 'projet_ros2', 'corridor'],   
     ['ros2', 'run', 'projet_ros2', 'goal_node'],    
 ]
@@ -31,7 +31,7 @@ class ChallengeManager(Node):
         super().__init__('challenge_manager')
 
         self.image_sub = self.create_subscription(
-            CompressedImage, '/image_raw/compressed', self.image_callback, 10)
+            CompressedImage, '/camera/image_raw/compressed', self.image_callback, 10)
 
         self.challenge_index = 0
         self.blue_counter    = 0

@@ -53,7 +53,7 @@ class Challenge1Follow(Node):
         self.get_logger().info(f'Suivi de ligne | roundabout={self.roundabout_direction}')
 
         self.image_sub = self.create_subscription(
-            CompressedImage, '/image_raw/compressed', self.image_callback, 10)
+            CompressedImage, '/camera/image_raw/compressed', self.image_callback, 10)
         self.scan_sub  = self.create_subscription(
             LaserScan, '/scan', self.scan_callback, 10)
         self.cmd_pub   = self.create_publisher(Twist, '/cmd_vel', 10)

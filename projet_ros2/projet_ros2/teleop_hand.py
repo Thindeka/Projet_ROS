@@ -5,12 +5,13 @@ import cv2
 import mediapipe as mp
 import numpy as np
 
-# ---------------------------------------------------------------------------
+
 LINEAR_SPEED  = 0.15
 ANGULAR_SPEED = 0.5
 ANGLE_DEAD_ZONE = 30
-STREAM_URL = "http://192.168.0.65:8080/video"
-# ---------------------------------------------------------------------------
+#STREAM_URL = "http://192.168.0.65:8080/video" # URL de la caméra de l'ordi
+STREAM_URL = "http://192.168.50.210:8080/video"
+
 
 
 class IndexTeleop(Node):
@@ -28,20 +29,19 @@ class IndexTeleop(Node):
 
         self.cap = cv2.VideoCapture(STREAM_URL)
 
-        # Le stream réseau peut mettre quelques secondes à s'ouvrir
         if not self.cap.isOpened():
             self.get_logger().warn('Stream non disponible immédiatement, on continue quand même...')
 
-        self.timer = self.create_timer(0.05, self.timer_callback)
+        self.timer = self.create_timer(0.003, self.timer_callback)
 
-        print('[INIT] Téléopération par index')
-        print('[INIT] Index vers HAUT    → AVANCER')
-        print('[INIT] Index vers BAS     → RECULER')
-        print('[INIT] Index vers GAUCHE  → TOURNER GAUCHE')
-        print('[INIT] Index vers DROITE  → TOURNER DROITE')
-        print('[INIT] Poing / rien       → STOP')
+        print('Téléopération par index')
+        print('Index vers HAUT    -> AVANCER')
+        print('Index vers BAS     ->  RECULER')
+        print('[Index vers GAUCHE  -> TOURNER GAUCHE')
+        print('Index vers DROITE  -> TOURNER DROITE')
+        print('Rien -> STOP')
 
-    # -----------------------------------------------------------------------
+    
     def _index_direction(self, hand_landmarks, w, h):
         lm = hand_landmarks.landmark
 
@@ -66,13 +66,13 @@ class IndexTeleop(Node):
 
         return direction, angle
 
-    # -----------------------------------------------------------------------
+    
     def timer_callback(self):
         ret, frame = self.cap.read()
 
-        # Si la frame échoue, tenter de reconnecter le stream
+        # Si la frame échoue, on tente de reconnecter le stream
         if not ret:
-            self.get_logger().warn('Frame non reçue, tentative de reconnexion...')
+            self.get_logger().warn('Frame non reçue, tentative de reconnexion')
             self.cap.release()
             self.cap = cv2.VideoCapture(STREAM_URL)
             return
@@ -111,6 +111,7 @@ class IndexTeleop(Node):
 
         self.cmd_pub.publish(twist)
 
+        # AFFICHAGE
         color_map = {
             'FORWARD':  (0, 255, 0),
             'BACKWARD': (0, 0, 255),
@@ -126,11 +127,11 @@ class IndexTeleop(Node):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
         legend = [
-            'Index HAUT   → AVANCER',
-            'Index BAS    → RECULER',
-            'Index GAUCHE → TOURNER G',
-            'Index DROITE → TOURNER D',
-            'Poing/rien   → STOP',
+            'Index HAUT   -> AVANCER',
+            'Index BAS    -> RECULER',
+            'Index GAUCHE -> TOURNER G',
+            'Index DROITE -> TOURNER D',
+            'Rien   -> STOP',
         ]
         for i, txt in enumerate(legend):
             cv2.putText(frame, txt, (10, h - 20 - i * 22),
@@ -140,12 +141,12 @@ class IndexTeleop(Node):
         if cv2.waitKey(1) & 0xFF == ord('q'):
             rclpy.shutdown()
 
-    # -----------------------------------------------------------------------
+
     def _publish_stop(self):
         self.cmd_pub.publish(Twist())
 
 
-# ---------------------------------------------------------------------------
+
 def main(args=None):
     rclpy.init(args=args)
     node = IndexTeleop()

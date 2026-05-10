@@ -1,8 +1,7 @@
 import math
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import LaserScan, CompressedImage
-from geometry_msgs.msg import Twist
+from sensor_msgs.msg import LaserScan
 import cv2
 import numpy as np
 
@@ -10,17 +9,14 @@ import numpy as np
 class CorridorNode(Node):
 
     def __init__(self):
-        super().__init__('corridor')
+        super().__init__('corridor_node')
 
-        # -------------------------
-        # PARAMETRES
-        # -------------------------
         self.linear_scale = 0.05
         self.angular_scale = 0.20
 
         # distances de déclenchement
         self.pre_turn_dist = 0.45
-        self.turn_dist = 0.20
+        self.turn_dist = 0.30
 
         # biais de pré-virage
         self.pre_turn_bias = 0.15
@@ -29,20 +25,14 @@ class CorridorNode(Node):
         self.turn_angular = 0.35
 
         # distance cible au mur droit pendant le virage
-        self.target_right_dist = 0.45 # 50?
+        self.target_right_dist = 0.40 
 
-        # ROS
+        self.dist_fin = 1 
+
         self.scan_sub = self.create_subscription(
             LaserScan,
             '/scan',
             self.scan_callback,
-            10
-        )
-
-        self.image_sub = self.create_subscription(
-            CompressedImage,
-            '/image_raw/compressed',
-            self.image_callback,
             10
         )
 
@@ -58,9 +48,8 @@ class CorridorNode(Node):
 
         self.get_logger().info('corridor_node a commencé')
 
-    # -------------------------------------------------
+
     # FILTRE LIDAR
-    # -------------------------------------------------
     def secu(self, values):
 
         vals = []
@@ -80,16 +69,12 @@ class CorridorNode(Node):
 
         return vals[len(vals) // 2]
 
-    # -------------------------------------------------
+
+
     # CALLBACK LIDAR
-    # -------------------------------------------------
     def scan_callback(self, msg: LaserScan):
 
-        # -------------------------
-        # SECTEURS LIDAR
-        # -------------------------
-
-        # devant
+        # avant
         dist_avant = self.secu(
             list(msg.ranges[345:360]) +
             list(msg.ranges[0:15])
@@ -119,12 +104,10 @@ class CorridorNode(Node):
 
         # sécurité
         if dist_avant is None:
-
             self.current_mode = "STOP"
-
             self.cmd_pub.publish(cmd)
-
             return
+
 
         # fallback
         if dist_avant_gauche is None:
@@ -139,14 +122,14 @@ class CorridorNode(Node):
         if dist_avant_droite is None:
             dist_avant_droite = msg.range_max
 
+
         # debug camera
         self.front_min = dist_avant
         self.left_dist = dist_gauche
         self.right_dist = dist_droite
 
-        # =========================================================
+
         # 1) VIRAGE FRANC
-        # =========================================================
         if dist_avant < self.turn_dist:
 
             self.current_mode = "TURN_LEFT"
@@ -167,7 +150,7 @@ class CorridorNode(Node):
             # rotation gauche + correction mur droit
             cmd.angular.z = (
                 self.turn_angular
-                + 0.8 * erreur_droite
+                + 0.8 * erreur_droite # 0.8
             )
 
             cmd.angular.z = max(
@@ -175,9 +158,8 @@ class CorridorNode(Node):
                 0.15
             )
 
-        # =========================================================
+
         # 2) PRE-VIRAGE
-        # =========================================================
         elif (
             dist_avant < self.pre_turn_dist
             and dist_avant_gauche > dist_avant_droite + 0.10
@@ -185,17 +167,28 @@ class CorridorNode(Node):
 
             self.current_mode = "PRE_TURN"
 
+            """
             erreur = dist_gauche - dist_droite
 
             erreur = max(
                 min(erreur, 0.30),
                 -0.30
             )
+            """
+
+            err = (
+                self.target_right_dist - dist_droite
+            )
+
+            err = max(
+                min(err, 0.20),
+                -0.20
+            )
 
             cmd.linear.x = 0.03
 
             cmd.angular.z = (
-                (-self.angular_scale * erreur)
+                (-self.angular_scale * err)
                 + self.pre_turn_bias
             )
 
@@ -203,10 +196,17 @@ class CorridorNode(Node):
                 min(cmd.angular.z, 0.35),
                 -0.20
             )
+        
 
-        # =========================================================
-        # 3) CENTRAGE NORMAL
-        # =========================================================
+        # 3) FIN CHALLENGE  
+        elif dist_gauche > self.dist_fin  and dist_droite > self.dist_fin :
+            self.current_mode = "FIN" 
+            cmd.linear.x = 0.0
+            cmd.angular.z = 0.0
+    
+
+
+        # 4) CENTRAGE NORMAL
         else:
 
             self.current_mode = "CENTER"
@@ -255,115 +255,8 @@ class CorridorNode(Node):
 
             self.last_log_time = now
 
-    # -------------------------------------------------
-    # CALLBACK CAMERA
-    # -------------------------------------------------
-    def image_callback(self, msg: CompressedImage):
+     
 
-        try:
-
-            np_arr = np.frombuffer(
-                msg.data,
-                np.uint8
-            )
-
-            image = cv2.imdecode(
-                np_arr,
-                cv2.IMREAD_COLOR
-            )
-
-            if image is None:
-                return
-
-            h, w = image.shape[:2]
-
-            debug = image.copy()
-
-            # ligne centrale
-            cv2.line(
-                debug,
-                (w // 2, 0),
-                (w // 2, h),
-                (0, 255, 255),
-                2
-            )
-
-            mode_text = self.current_mode
-
-            color = (0, 255, 0)
-
-            if mode_text == "PRE_TURN":
-                color = (255, 200, 0)
-
-            elif mode_text == "TURN_LEFT":
-                color = (0, 165, 255)
-
-            elif mode_text == "STOP":
-                color = (0, 0, 255)
-
-            cv2.putText(
-                debug,
-                f"MODE : {mode_text}",
-                (20, 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.9,
-                color,
-                2
-            )
-
-            if hasattr(self, "front_min"):
-
-                cv2.putText(
-                    debug,
-                    f"front={self.front_min:.2f}",
-                    (20, 80),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 255, 255),
-                    2
-                )
-
-            if hasattr(self, "left_dist"):
-
-                cv2.putText(
-                    debug,
-                    f"left={self.left_dist:.2f}",
-                    (20, 115),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 255, 255),
-                    2
-                )
-
-            if hasattr(self, "right_dist"):
-
-                cv2.putText(
-                    debug,
-                    f"right={self.right_dist:.2f}",
-                    (20, 150),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 255, 255),
-                    2
-                )
-
-            cv2.imshow(
-                "Corridor Navigation",
-                debug
-            )
-
-            cv2.waitKey(1)
-
-        except Exception as e:
-
-            self.get_logger().error(
-                f'image_callback: {e}'
-            )
-
-
-# -------------------------------------------------
-# MAIN
-# -------------------------------------------------
 def main(args=None):
 
     rclpy.init(args=args)

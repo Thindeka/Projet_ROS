@@ -6,8 +6,6 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-
-    # Launch du prof (simulation Gazebo)
     projet2025_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
@@ -18,14 +16,15 @@ def generate_launch_description():
         )
     )
 
-    teleop = Node(
+    manager = Node(
         package='projet_ros2',
-        executable='teleop_hand',
-        name='index_teleop',
-        output='screen'
+        executable='manager_node',
+        name='challenge_manager',
+        output='screen',
     )
+
 
     return LaunchDescription([
         projet2025_launch,
-        teleop,
+        manager,
     ])

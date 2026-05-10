@@ -24,10 +24,13 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'follow_line = projet_ros2.line_following:main',
-            'corridor_node = projet_ros2.corridor_node:main',
-            'teleop_hand = projet_ros2.teleop_hand:main',
+            'manager_node = projet_ros2.manager_node:main',
             'calibration = projet_ros2.hsv_calibration_node:main',
+            'challenge1_follow = projet_ros2.challenge1:main',
+            'challenge2_avoid = projet_ros2.challenge2:main',
+            'corridor_node = projet_ros2.corridor_node:main',
+            'goal_node = projet_ros2.goal_node:main',
+            'teleop_hand = projet_ros2.teleop_hand:main'
         ],
     },
 )
